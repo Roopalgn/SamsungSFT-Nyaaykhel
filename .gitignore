@@ -1,0 +1,61 @@
+# ── Large data & model files ──────────────────────────────────────────────────
+data/raw/
+data/processed/
+model/*.tflite
+model/*.onnx
+model/*.pt
+model/*.pth
+docs/backup_demo.mp4
+
+# Keep sample outputs and eval docs
+!docs/sample_match_record.json
+!docs/model_eval.md
+!docs/qa_defense.md
+!docs/architecture_diagram.png
+!docs/confusion_matrix.png
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.env
+venv/
+env/
+.venv/
+*.ipynb_checkpoints/
+.ipynb_checkpoints/
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.jupyter/
+*.nbconvert.py
+
+# ── Android / Gradle ──────────────────────────────────────────────────────────
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/*.iml
+android/.idea/
+android/captures/
+android/app/release/
+android/**/*.apk
+android/**/*.aab
+# Keep debug APK in tracked artifacts folder
+!docs/*.apk
+
+# ── OS & Editor ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+*.swo
+.vscode/
+*.orig
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+secrets/
+*.key
+*.pem

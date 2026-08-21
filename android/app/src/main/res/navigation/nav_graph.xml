@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/homeFragment">
+
+    <fragment
+        android:id="@+id/homeFragment"
+        android:name="com.nyaaykhel.app.ui.HomeFragment"
+        android:label="NyaayKhel">
+        <action
+            android:id="@+id/action_home_to_analysis"
+            app:destination="@id/analysisFragment" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/analysisFragment"
+        android:name="com.nyaaykhel.app.ui.AnalysisFragment"
+        android:label="Analysing Match">
+        <action
+            android:id="@+id/action_analysis_to_matchRecord"
+            app:destination="@id/matchRecordFragment" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/matchRecordFragment"
+        android:name="com.nyaaykhel.app.ui.MatchRecordFragment"
+        android:label="Match Record">
+        <argument
+            android:name="matchId"
+            app:argType="string" />
+    </fragment>
+
+</navigation>

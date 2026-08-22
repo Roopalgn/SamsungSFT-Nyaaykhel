@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Foreground layer: white "N" text for NyaayKhel -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- White "N" lettermark centred in the safe zone (72×72 centred in 108×108) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,28 L34,80 L44,80 L44,48 L64,80 L74,80 L74,28 L64,28 L64,60 L44,28 Z" />
+</vector>

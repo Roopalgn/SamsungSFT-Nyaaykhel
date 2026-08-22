@@ -197,7 +197,7 @@ class MainViewModel(private val appContext: Context) : ViewModel() {
                     accumulatedEvents.add(event)
                     _liveEvents.value = accumulatedEvents.toList()
 
-                    Log.d(tag, "Event: ${event.eventType} conf=${event.confidence:.2f} " +
+                    Log.d(tag, "Event: ${event.eventType} conf=${"%.2f".format(event.confidence)} " +
                             "hash=${event.hash.take(8)}...")
                 }
             }

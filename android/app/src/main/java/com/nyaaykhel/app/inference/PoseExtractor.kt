@@ -4,8 +4,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import org.tensorflow.lite.Interpreter
-import org.tensorflow.lite.gpu.CompatibilityList
-import org.tensorflow.lite.gpu.GpuDelegate
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -19,10 +17,14 @@ import java.nio.channels.FileChannel
  * Output: [PersonKeypoints] — up to [maxPersons] persons, sorted left-to-right.
  *         Keypoints with visibility < [kpConfThreshold] are zeroed out.
  *
+ * GPU delegate was removed due to a GpuDelegate.Options / GpuDelegateFactory.Options
+ * classpath conflict in tensorflow-lite-gpu 2.14.0. CPU inference with configurable
+ * thread count is sufficient for demo video-file mode at 5-10 fps effective.
+ * GPU support is a Phase E addition once TFLite dependency stabilises.
+ *
  * On-device speed mitigations (from risk register):
- *  - [processEveryNFrames]: caller should skip frames. Default 3 → ~10fps at 30fps source.
- *  - GPU/NNAPI delegate: tried in order, falls back to CPU automatically.
- *  - [inferenceThreads]: CPU thread count. Reduce to 1 for single-thread mode on low-end.
+ *  - [inferenceThreads]: configurable (default 2, reduce to 1 for single-thread mode)
+ *  - Caller should skip every Nth frame via processEveryNFrames in MainViewModel
  */
 class PoseExtractor(
     context: Context,
@@ -30,14 +32,12 @@ class PoseExtractor(
     private val personConfThreshold: Float = 0.5f,
     private val kpConfThreshold: Float = 0.3f,
     private val inferenceThreads: Int = 2,
-    private val useGpu: Boolean = true,
 ) : AutoCloseable {
 
     private val tag = "PoseExtractor"
     private val modelInputSize = 320
 
-    private var interpreter: Interpreter
-    private var gpuDelegate: GpuDelegate? = null
+    private val interpreter: Interpreter
 
     // Output shape determined at runtime (handle both [1,56,8400] and [1,8400,56])
     private var outputTransposed = false   // true → output is [1, 56, N], need transpose
@@ -50,11 +50,12 @@ class PoseExtractor(
     }
 
     init {
-        val options = buildOptions()
-        val modelBuffer = loadModelFromAssets(context, MODEL_ASSET)
-        interpreter = Interpreter(modelBuffer, options)
+        val options = Interpreter.Options().apply {
+            numThreads = inferenceThreads
+        }
+        interpreter = Interpreter(loadModelFromAssets(context, MODEL_ASSET), options)
         inspectModel()
-        Log.i(tag, "PoseExtractor ready (GPU=$useGpu, threads=$inferenceThreads)")
+        Log.i(tag, "PoseExtractor ready (CPU, threads=$inferenceThreads)")
     }
 
     // ── Public API ───────────────────────────────────────────────────────────
@@ -81,7 +82,6 @@ class PoseExtractor(
 
     override fun close() {
         interpreter.close()
-        gpuDelegate?.close()
     }
 
     // ── Model inspection ─────────────────────────────────────────────────────
@@ -106,8 +106,7 @@ class PoseExtractor(
                 Log.i(tag, "Output format: [1, $numAnchors, $outputChannels]")
             }
             else -> {
-                Log.w(tag, "Unexpected output shape ${outShape.toList()} — " +
-                        "guessing transposed format")
+                Log.w(tag, "Unexpected output shape ${outShape.toList()} — guessing transposed")
                 outputTransposed = true
                 numAnchors = if (outShape.size >= 3) outShape[2] else 8400
             }
@@ -140,10 +139,8 @@ class PoseExtractor(
 
     private fun allocateOutputBuffer(): Array<Array<FloatArray>> {
         return if (outputTransposed) {
-            // [1, outputChannels, numAnchors]
             Array(1) { Array(outputChannels) { FloatArray(numAnchors) } }
         } else {
-            // [1, numAnchors, outputChannels]
             Array(1) { Array(numAnchors) { FloatArray(outputChannels) } }
         }
     }
@@ -166,14 +163,12 @@ class PoseExtractor(
             val conf = row[4]
             if (conf < personConfThreshold) continue
 
-            // Box: cx, cy, w, h in model input coords (0..320)
             val cx = row[0] * scaleX
             val cy = row[1] * scaleY
             val w  = row[2] * scaleX
             val h  = row[3] * scaleY
             val box = android.graphics.RectF(cx - w/2, cy - h/2, cx + w/2, cy + h/2)
 
-            // Keypoints: [x, y, visibility] × 17, starting at index 5
             val keypoints = Array(17) { k ->
                 val base = 5 + k * 3
                 Keypoint(
@@ -224,25 +219,6 @@ class PoseExtractor(
         return person.copy(keypoints = filtered)
     }
 
-    // ── Interpreter options ──────────────────────────────────────────────────
-
-    private fun buildOptions(): Interpreter.Options {
-        val options = Interpreter.Options().apply {
-            numThreads = inferenceThreads
-        }
-        if (useGpu) {
-            val compatList = CompatibilityList()
-            if (compatList.isDelegateSupportedOnThisDevice) {
-                gpuDelegate = GpuDelegate(compatList.bestOptionsForThisDevice)
-                options.addDelegate(gpuDelegate!!)
-                Log.i(tag, "GPU delegate added")
-            } else {
-                Log.i(tag, "GPU delegate not supported — using CPU")
-            }
-        }
-        return options
-    }
-
     private fun loadModelFromAssets(context: Context, filename: String): MappedByteBuffer {
         val fd = context.assets.openFd(filename)
         val fis = FileInputStream(fd.fileDescriptor)
@@ -263,13 +239,12 @@ data class PersonKeypoints(
     fun toFlatArray(): FloatArray = FloatArray(17 * 3) { i ->
         val kpIdx = i / 3
         when (i % 3) {
-            0 -> keypoints[kpIdx].x
-            1 -> keypoints[kpIdx].y
+            0    -> keypoints[kpIdx].x
+            1    -> keypoints[kpIdx].y
             else -> keypoints[kpIdx].conf
         }
     }
 
-    // Suppress auto-generated equals/hashCode warnings for Array field
     override fun equals(other: Any?) = other is PersonKeypoints && confidence == other.confidence
     override fun hashCode() = confidence.hashCode()
 }

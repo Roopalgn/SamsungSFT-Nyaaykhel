@@ -31,6 +31,7 @@ android {
 
     buildFeatures {
         viewBinding true
+        buildConfig true   // needed for BuildConfig.VERSION_NAME in MainViewModel
     }
 
     compileOptions {
@@ -70,7 +71,9 @@ dependencies {
 
     // ── TensorFlow Lite ────────────────────────────────────────────────────
     implementation 'org.tensorflow:tensorflow-lite:2.14.0'
-    implementation 'org.tensorflow:tensorflow-lite-gpu:2.14.0'
+    // tensorflow-lite-gpu removed: GpuDelegate.Options/GpuDelegateFactory.Options
+    // classpath conflict in 2.14.0 breaks compilation. CPU inference is sufficient
+    // for demo video-file mode. GPU delegate is a Phase E / production addition.
     implementation 'org.tensorflow:tensorflow-lite-support:0.4.4'
     // Select TF ops — needed if classifier was exported with SELECT_TF_OPS
     implementation 'org.tensorflow:tensorflow-lite-select-tf-ops:2.14.0'

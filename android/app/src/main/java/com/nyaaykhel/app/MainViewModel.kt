@@ -96,7 +96,6 @@ class MainViewModel(private val appContext: Context) : ViewModel() {
             val poseExtractor = PoseExtractor(
                 appContext,
                 inferenceThreads = 2,
-                useGpu = true,
             )
             val classifier = EventClassifier(
                 appContext,

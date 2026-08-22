@@ -15,10 +15,16 @@ import java.nio.channels.FileChannel
  * Maintains a sliding window of [windowSize] frames of keypoint sequences.
  * When the buffer is full, runs the TFLite classifier and returns the detected event.
  *
- * Sliding window config must match training (notebook 03):
+ * Sliding window config must match training (notebook 03 / model_config.json):
  *  - windowSize  = 30 frames
  *  - featureDim  = 102  (MAX_PERSONS=2 × 17_keypoints × 3 [x,y,conf])
  *  - maxPersons  = 2
+ *
+ * Config is hardcoded deliberately for the prototype (simpler, no file-read failure path
+ * on demo day). Values are validated against the loaded model's actual I/O tensor shapes
+ * at init time and a warning is logged to logcat if there is a mismatch — so swapping in
+ * a retrained model with different dimensions will be caught immediately. Runtime loading
+ * from model_config.json is a Phase E improvement.
  *
  * Output: [EventClassification] with predicted class and softmax confidence,
  *         or null if confidence < [confidenceThreshold] or buffer not yet full.

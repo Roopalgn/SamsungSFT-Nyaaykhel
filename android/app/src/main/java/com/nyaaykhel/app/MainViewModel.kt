@@ -153,7 +153,7 @@ class MainViewModel(private val appContext: Context) : ViewModel() {
         var sampleIdx = 0
         var timeUs = 0L
         while (timeUs < durationMs * 1000) {
-            ensureActive()
+            currentCoroutineContext().ensureActive()
 
             sampleIdx++
             // Throttle: only run inference every Nth sample

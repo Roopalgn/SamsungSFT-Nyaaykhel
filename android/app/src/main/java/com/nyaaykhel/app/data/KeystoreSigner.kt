@@ -47,7 +47,7 @@ object KeystoreSigner {
      */
     fun sign(data: String): String {
         val keyStore = KeyStore.getInstance(KEYSTORE_PROVIDER).apply { load(null) }
-        val privateKey = keyStore.getKey(KEY_ALIAS, null)
+        val privateKey = keyStore.getKey(KEY_ALIAS, null) as? java.security.PrivateKey
             ?: error("Signing key not found — call getOrCreatePublicKey() first")
 
         val signature = Signature.getInstance("SHA256withRSA").apply {

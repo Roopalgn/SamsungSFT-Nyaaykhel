@@ -18,7 +18,7 @@ data class Match(
 )
 
 /**
- * A single detected scoring event in a match.
+ * A single candidate event detected in a match video.
  *
  * Hash chain fields: event_id, match_id, timestamp, event_type, confidence, prev_hash
  * See docs/hash_chain_spec.md for the canonical spec — this order is locked.
@@ -42,13 +42,15 @@ data class EventRecord(
     val prevHash: String,            // SHA-256 hex of previous event (64 zeros for genesis)
     val hash: String,                // SHA-256 hex of this event (per hash_chain_spec.md)
     val frameIndex: Int = -1,        // source video frame (informational only)
+    val videoTimestampMs: Long = 0L,  // source-video position, excluded from locked hash spec
+    val reviewStatus: String = "pending", // pending | approved | rejected, excluded from hash
 )
 
 /** Human-readable event type labels for UI display. */
 enum class EventType(val label: String, val colorResId: Int) {
-    RAID_START("Raid Start",    android.R.color.holo_orange_light),
-    TOUCH("Touch",              android.R.color.holo_red_light),
-    ESCAPE_RETURN("Escape",     android.R.color.holo_green_light),
+    RAID_START("Candidate Raid",    android.R.color.holo_orange_light),
+    TOUCH("Candidate Contact",      android.R.color.holo_red_light),
+    ESCAPE_RETURN("Candidate Return", android.R.color.holo_green_light),
     NEUTRAL("Neutral",          android.R.color.darker_gray);
 
     companion object {

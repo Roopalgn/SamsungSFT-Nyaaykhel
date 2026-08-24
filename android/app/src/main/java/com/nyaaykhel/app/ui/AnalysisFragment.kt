@@ -67,7 +67,7 @@ class AnalysisFragment : Fragment() {
                         }
                     }
                     is MainViewModel.AnalysisState.Done -> {
-                        binding.tvProgress.text = "Done — ${state.eventCount} events detected"
+                        binding.tvProgress.text = "Done — ${state.eventCount} candidate events flagged"
                         binding.progressBar.progress = binding.progressBar.max
                         binding.btnCancel.text = "View Match Record"
                         binding.btnCancel.setOnClickListener {

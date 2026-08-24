@@ -56,14 +56,17 @@ class MainViewModel(private val appContext: Context) : ViewModel() {
 
     // ── Inference config (throttle mitigations) ──────────────────────────────
 
-    /** Process every Nth frame. 3 → ~10fps at 30fps source. 6 → ~5fps. */
-    var processEveryNFrames: Int = 3
+    /** Process every sampled frame. Keep this aligned with notebook 02 target_fps. */
+    var processEveryNFrames: Int = 1
 
     /** Frames sampled per second from video (used for MediaMetadataRetriever seek). */
     private val sampleFps = 10f
 
     /** Confidence threshold passed to EventClassifier. */
     var confidenceThreshold: Float = 0.65f
+
+    /** Prevent one sustained event from being logged as many adjacent rows. */
+    private val eventCooldownMs = 2_000L
 
     // ── Processing job ───────────────────────────────────────────────────────
 
@@ -140,7 +143,7 @@ class MainViewModel(private val appContext: Context) : ViewModel() {
             MediaMetadataRetriever.METADATA_KEY_DURATION
         )?.toLongOrNull() ?: throw IllegalStateException("Cannot read video duration")
 
-        // Sample at sampleFps, processing every Nth sample via processEveryNFrames
+        // Sample at sampleFps. Notebook 02 uses the same target_fps before training.
         val intervalMs = (1000f / sampleFps).toLong()
         val totalSamples = (durationMs / intervalMs).toInt()
 
@@ -149,6 +152,7 @@ class MainViewModel(private val appContext: Context) : ViewModel() {
         var prevHash = EventLog.GENESIS_PREV_HASH
         var frameIdx = 0
         val accumulatedEvents = mutableListOf<EventRecord>()
+        val lastLoggedByTypeMs = mutableMapOf<String, Long>()
 
         var sampleIdx = 0
         var timeUs = 0L
@@ -171,6 +175,15 @@ class MainViewModel(private val appContext: Context) : ViewModel() {
                 val classification: EventClassification? = classifier.addFrame(persons)
 
                 if (classification != null && classification.eventType != "neutral") {
+                    val videoTimestampMs = timeUs / 1000L
+                    val lastLoggedAt = lastLoggedByTypeMs[classification.eventType]
+                    if (lastLoggedAt != null && videoTimestampMs - lastLoggedAt < eventCooldownMs) {
+                        _state.value = AnalysisState.Processing(sampleIdx, totalSamples)
+                        timeUs += intervalMs * 1000
+                        frameIdx++
+                        continue
+                    }
+
                     val eventId = "evt-${UUID.randomUUID()}"
                     val timestamp = nowIso()
                     val hash = EventLog.computeHash(
@@ -190,14 +203,17 @@ class MainViewModel(private val appContext: Context) : ViewModel() {
                         prevHash   = prevHash,
                         hash       = hash,
                         frameIndex = frameIdx,
+                        videoTimestampMs = videoTimestampMs,
+                        reviewStatus = "pending",
                     )
                     db.eventDao().insertEvent(event)
                     prevHash = hash
+                    lastLoggedByTypeMs[classification.eventType] = videoTimestampMs
                     accumulatedEvents.add(event)
                     _liveEvents.value = accumulatedEvents.toList()
 
                     Log.d(tag, "Event: ${event.eventType} conf=${"%.2f".format(event.confidence)} " +
-                            "hash=${event.hash.take(8)}...")
+                            "t=${event.videoTimestampMs}ms hash=${event.hash.take(8)}...")
                 }
             }
 
@@ -272,6 +288,13 @@ class MainViewModel(private val appContext: Context) : ViewModel() {
     // ── Events for match record screen ───────────────────────────────────────
 
     fun getEventsFlow(matchId: String) = db.eventDao().getEventsForMatchFlow(matchId)
+
+    fun updateEventReviewStatus(eventId: String, status: String) {
+        if (status !in setOf("pending", "approved", "rejected")) return
+        viewModelScope.launch(Dispatchers.IO) {
+            db.eventDao().updateReviewStatus(eventId, status)
+        }
+    }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 

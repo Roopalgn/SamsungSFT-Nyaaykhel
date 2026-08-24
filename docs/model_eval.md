@@ -9,7 +9,7 @@
 
 | Property | Value |
 |---|---|
-| Task | Pose-sequence classification for kabaddi scoring event detection |
+| Task | Pose-sequence classification for candidate kabaddi event detection |
 | Classes | `raid_start`, `touch`, `escape_return`, `neutral` |
 | Input | Sliding window of 30 frames × (2 players × 17 keypoints × 3 values) = shape (30, 102) |
 | Architecture | 2-layer GRU, hidden_dim=128 (or 1D-TCN — whichever performed better in training) |
@@ -17,7 +17,7 @@
 | Training framework | PyTorch |
 | Export | ONNX → TFLite float32 |
 | Inference speed (Colab GPU) | ~[X] ms/window |
-| Inference speed (target device CPU, stride=3) | ~[X] ms/window |
+| Inference speed (target device CPU, 10fps sampling) | ~[X] ms/window |
 
 ---
 
@@ -42,7 +42,7 @@ This is the honest, complete statement of data sourcing. It is stated here and i
 | Total clips downloaded | [X] |
 | Total clips after quality filtering | [X] |
 | Clips labeled | [X] |
-| Train / test split | 80% / 20% (random split stratified by class) |
+| Train / test split | Source-video-level split: train / test / one untouched demo video |
 | Clip duration | 5 seconds each |
 | Angle distribution | ~[X]% side (~90°), ~[X]% quarter (~70°), ~[X]% angled (~60°) |
 
@@ -64,7 +64,7 @@ This is the honest, complete statement of data sourcing. It is stated here and i
 
 **Test set accuracy: [X]%** (at confidence threshold 0.65)
 
-_Computed on the held-out 20% test split — these clips were not seen during training._
+_Computed on held-out source videos. No `source_video_id` appears in more than one of train, test, or demo._
 
 ### Per-Class Metrics
 
@@ -121,14 +121,11 @@ _[Fill in after Phase C Android app testing]_
 
 Test device: [Device model] (8GB RAM — **NOT the target low-end device**. See `qa_defense.md` for explanation of this limitation.)
 
-| Stride setting | Effective fps processed | Avg inference (ms/window) | Notes |
+| Sampling setting | Effective fps processed | Avg inference (ms/window) | Notes |
 |---|---|---|---|
-| Every frame (stride=1) | ~30fps | [X]ms | Likely too slow on low-end |
-| Every 2nd frame (stride=2) | ~15fps | [X]ms | May work on mid-range |
-| Every 3rd frame (stride=3) | ~10fps | [X]ms | Target for low-end |
-| Every 6th frame (stride=6) | ~5fps | [X]ms | Minimum acceptable |
+| Target video sampling | 10fps | [X]ms | Must match notebook 02 `TARGET_FPS` |
 
-**Low-end device target (≤4GB RAM, no GPU delegate):** stride=3 or higher, CPU-only inference. Validation pending.
+**Low-end device target (≤4GB RAM, no GPU delegate):** CPU-only inference at 10fps. Validation pending; if this is too slow, retrain and runtime sampling must change together.
 
 ---
 
@@ -137,8 +134,8 @@ Test device: [Device model] (8GB RAM — **NOT the target low-end device**. See 
 1. **YouTube-only training data** — accuracy on real grassroots footage (different lighting, camera quality, viewing angles) is unknown. Expected to degrade; Phase 1 includes real-world validation.
 2. **Test device is not low-end** — inference benchmarks are on an 8GB RAM phone. Low-end device performance is projected from Colab CPU benchmarks; not measured directly.
 3. **Single-angle only** — occlusion is a fundamental limitation of single-camera capture.
-4. **No contact ground truth** — the model detects spatial proximity and movement patterns, not physical contact. The "touch" class label refers to the *event* (scoring event with touch), not the act of skin contact.
-5. **Fixed window size** — the 30-frame window assumes ~10fps processing. Slower inference (lower effective fps) changes the temporal context and may reduce accuracy.
+4. **No contact ground truth** — the model detects spatial proximity and movement patterns, not physical contact. The `touch` class should be presented as candidate contact flagged for review.
+5. **Fixed window size** — the 30-frame window assumes 10fps processing, i.e. about 3 seconds of video. Slower inference changes the temporal context and requires retraining.
 
 ---
 

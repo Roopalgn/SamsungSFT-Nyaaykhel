@@ -7,20 +7,21 @@
 
 ## What It Does
 
-NyaayKhel is an Android app that turns any phone camera into a real-time match intelligence system for grassroots kabaddi tournaments.
+NyaayKhel is an Android prototype that turns a phone-recorded kabaddi video into a reviewable candidate-event timeline for grassroots tournaments.
 
 **Core pipeline:**
 ```
-Video file / Camera feed
+Video file / optional camera feed
     → YOLOv8-pose (multi-person keypoint extraction, TFLite, fully on-device)
     → Sliding-window buffer (1–2 sec of frames)
     → GRU/TCN classifier (trained by us, exported to TFLite)
-    → Event log: raid_start | touch | escape_return | neutral
+    → Candidate event log: raid_start | touch | escape_return | neutral
+    → Referee review status: pending | approved | rejected
     → SHA-256 hash chain + Android Keystore signing (tamper-evident record)
-    → Export as signed JSON (the "verified match record")
+    → Export as signed JSON (tamper-evident reviewed match record)
 ```
 
-Works **fully offline** — no internet connection required at the venue.
+Designed to work **fully offline** once the TFLite models are bundled — no internet connection required at the venue.
 
 ---
 
@@ -80,7 +81,7 @@ NyaayKhel/
 
 ## Accuracy Target
 
-**70–80% on held-out test clips.** A documented confusion matrix at this level is more credible under judge questioning than unverified higher claims. See `docs/model_eval.md` for full evaluation writeup.
+**Target: 70–80% on source-video-held-out test clips.** A documented confusion matrix at this level is more credible under judge questioning than unverified higher claims. See `docs/model_eval.md` for full evaluation writeup.
 
 ---
 
@@ -94,7 +95,7 @@ Training data and demo footage are sourced from publicly available YouTube kabad
 
 - [ ] `model/classifier.tflite` + confusion matrix PNG
 - [ ] `docs/model_eval.md`
-- [ ] Android APK (video file → tamper-evident event log)
+- [ ] Android APK (video file → reviewable tamper-evident event log)
 - [ ] `docs/sample_match_record.json` (signed JSON)
 - [ ] `docs/architecture_diagram.png`
 - [ ] `docs/backup_demo.mp4`
@@ -107,7 +108,7 @@ Training data and demo footage are sourced from publicly available YouTube kabad
 See [`docs/qa_defense.md`](docs/qa_defense.md) for full written answers. Quick summary:
 
 - **"How do you detect contact?"** → Spatial proximity + movement patterns consistent with scoring events. Referee verifies using flagged events and audit trail.
-- **"How offline?"** → Both TFLite models run on-device via GPU/NNAPI delegate; event log stored in Room (SQLite) locally. Zero network calls.
+- **"How offline?"** → Both TFLite models run on-device; event log stored in Room (SQLite) locally. Zero network calls during analysis/export.
 - **"Isn't this just action recognition?"** → Pose-sequence classification — fewer parameters, faster on-device, more interpretable, and more honest to what the model actually learns.
 - **"What's your accuracy?"** → ~70–80% on held-out test split. Confusion matrix available.
 

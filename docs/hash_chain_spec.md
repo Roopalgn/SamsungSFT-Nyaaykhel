@@ -20,7 +20,7 @@ The hash is computed over exactly these fields, **in this order**:
 | 5 | `confidence` | **String (formatted float)** | See §2 — must use `"%.6f"` formatting in both Python and Kotlin |
 | 6 | `prev_hash` | String (hex) | SHA-256 hex of previous event, or 64 zeros for genesis |
 
-**Fields NOT included:** `hash` itself (self-referential), `device_public_key`, `terminal_hash`, `signature`, any future metadata fields.
+**Fields NOT included:** `hash` itself (self-referential), `videoTimestampMs`, `reviewStatus`, `device_public_key`, `terminal_hash`, `signature`, any future metadata fields.
 
 ---
 

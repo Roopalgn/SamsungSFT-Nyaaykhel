@@ -1,6 +1,8 @@
 package com.nyaaykhel.app.data
 
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 // ── DAOs ─────────────────────────────────────────────────────────────────────
@@ -40,6 +42,9 @@ interface EventDao {
     @Query("SELECT hash FROM events WHERE matchId = :matchId ORDER BY rowid DESC LIMIT 1")
     suspend fun getLastHash(matchId: String): String?
 
+    @Query("UPDATE events SET reviewStatus = :status WHERE eventId = :eventId")
+    suspend fun updateReviewStatus(eventId: String, status: String)
+
     @Query("DELETE FROM events WHERE matchId = :matchId")
     suspend fun deleteEventsForMatch(matchId: String)
 }
@@ -48,7 +53,7 @@ interface EventDao {
 
 @Database(
     entities = [Match::class, EventRecord::class],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class MatchDatabase : RoomDatabase() {
@@ -58,13 +63,20 @@ abstract class MatchDatabase : RoomDatabase() {
     companion object {
         @Volatile private var INSTANCE: MatchDatabase? = null
 
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE events ADD COLUMN videoTimestampMs INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE events ADD COLUMN reviewStatus TEXT NOT NULL DEFAULT 'pending'")
+            }
+        }
+
         fun getInstance(context: android.content.Context): MatchDatabase {
             return INSTANCE ?: synchronized(this) {
                 Room.databaseBuilder(
                     context.applicationContext,
                     MatchDatabase::class.java,
                     "nyaaykhel_matches.db",
-                ).build().also { INSTANCE = it }
+                ).addMigrations(MIGRATION_1_2).build().also { INSTANCE = it }
             }
         }
     }

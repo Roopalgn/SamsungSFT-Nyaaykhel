@@ -10,7 +10,7 @@ import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 
 /**
- * GRU/TCN temporal classifier for kabaddi scoring events.
+ * GRU/TCN temporal classifier for candidate kabaddi events.
  *
  * Maintains a sliding window of [windowSize] frames of keypoint sequences.
  * When the buffer is full, runs the TFLite classifier and returns the detected event.

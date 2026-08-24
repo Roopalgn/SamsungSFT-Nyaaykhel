@@ -25,7 +25,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Detected events"
+        android:text="Candidate events"
         android:textStyle="bold"
         android:textSize="14sp"
         android:layout_marginBottom="8dp" />

@@ -16,7 +16,7 @@ This file prepares rehearsed, technically honest answers to the questions most l
 > [!IMPORTANT]
 > These are confirmed limitations that must be stated honestly if asked. They are not embarrassing — a 22-year-old solo builder being transparent about prototype scope is more credible than vague overclaims.
 
-1. **Test device is not low-end.** The prototype was developed and tested on an 8GB RAM Android phone — not the "low-end Android" target claimed in the pitch. The app includes configurable inference throttling (5–10fps mode, frame-skip, single-thread option) specifically designed for low-end device degradation. The honest framing: *"Phase 1 target hardware is low-end Android ≤4GB RAM. Our prototype includes the throttling controls for that, but low-end device validation is Phase 1 work we haven't completed yet."*
+1. **Test device is not low-end.** The prototype was developed and tested on an 8GB RAM Android phone — not the "low-end Android" target claimed in the pitch. The honest framing: *"Phase 1 target hardware is low-end Android <=4GB RAM. Our prototype is designed for 10fps on-device analysis, but low-end device validation is Phase 1 work we haven't completed yet."*
 
 2. **YouTube-only footage.** All training data and demo footage is sourced from publicly available YouTube kabaddi match videos. There is no footage from real grassroots tournaments. This is disclosed in `docs/model_eval.md`. Honest framing: *"We trained on public YouTube footage — the model works on real kabaddi matches, but we haven't yet filmed a grassroots tournament ourselves. That's Phase 1 deployment work."*
 
@@ -43,7 +43,7 @@ This file prepares rehearsed, technically honest answers to the questions most l
 
 **Answer:**
 > Both TFLite models run entirely on-device using TensorFlow Lite:
-> - YOLOv8n-pose (pose extraction): ~[X] MB, runs via GPU/NNAPI delegate where available, CPU fallback otherwise.
+> - YOLOv8n-pose (pose extraction): ~[X] MB, currently CPU-only in the prototype.
 > - GRU/TCN classifier: ~[X] KB (very small — ~100–200k parameters), also TFLite.
 >
 > The event log is written to Room (SQLite) on the device. Export to JSON is also local. Zero network calls are made during a match. Internet is only used for the initial app install.
@@ -69,7 +69,7 @@ This file prepares rehearsed, technically honest answers to the questions most l
 ### "What's your accuracy? Have you tested it on real matches?"
 
 **Answer:**
-> On our held-out test split (20% of labeled clips from YouTube footage), we achieve approximately [X]% accuracy across 4 classes. The confusion matrix is in `docs/confusion_matrix.png`.
+> On our held-out source-video test split from YouTube footage, we achieve approximately [X]% accuracy across 4 classes. The confusion matrix is in `docs/confusion_matrix.png`.
 >
 > The model most often confuses `touch` and `neutral` — cases where the raider enters the defensive zone without contact. This is documented and is the primary Phase 2 improvement target (adding a second angle to improve depth estimation).
 >
@@ -113,7 +113,7 @@ This file prepares rehearsed, technically honest answers to the questions most l
 **Answer:**
 > Through the NYKS (Nehru Yuva Kendra Sangathan) ecosystem — 623 districts, 8.5M enrolled youth. We're not building a consumer app that hopes for viral adoption. We're targeting the tournament organizer and district association level: one NyaayKhel installation per tournament, run by one volunteer recorder, generates verified records for all participating athletes.
 >
-> Each verified match record is free to athletes. Revenue comes from per-tournament licensing to organizers (Phase 1), annual subscriptions to federations (Phase 2), and government licensing to SAI/Khelo India (Phase 3).
+> Each tamper-evident reviewed match record is free to athletes. Revenue comes from per-tournament licensing to organizers (Phase 1), annual subscriptions to federations (Phase 2), and government licensing to SAI/Khelo India (Phase 3).
 
 ---
 
@@ -132,6 +132,6 @@ These answers require knowing actual numbers from the built app — fill in befo
 
 - [ ] Actual YOLOv8n-pose TFLite model size (MB)
 - [ ] Actual GRU/TCN TFLite model size (KB)
-- [ ] Actual inference fps measured on test device (8GB phone, various stride settings)
+- [ ] Actual inference fps measured on test device (8GB phone, 10fps video sampling)
 - [ ] Actual accuracy number from confusion matrix
 - [ ] Actual most-confused class pair (from confusion matrix)

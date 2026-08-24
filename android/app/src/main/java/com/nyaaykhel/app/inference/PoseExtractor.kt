@@ -15,6 +15,8 @@ import java.nio.channels.FileChannel
  *
  * Input:  Bitmap (any size) → internally scaled to 320×320, normalised [0,1]
  * Output: [PersonKeypoints] — up to [maxPersons] persons, sorted left-to-right.
+ *         Bounding boxes stay in source-image pixel space for NMS/sorting.
+ *         Keypoints are normalised to [0,1], matching the classifier training data.
  *         Keypoints with visibility < [kpConfThreshold] are zeroed out.
  *
  * GPU delegate was removed due to a GpuDelegate.Options / GpuDelegateFactory.Options
@@ -24,7 +26,7 @@ import java.nio.channels.FileChannel
  *
  * On-device speed mitigations (from risk register):
  *  - [inferenceThreads]: configurable (default 2, reduce to 1 for single-thread mode)
- *  - Caller should skip every Nth frame via processEveryNFrames in MainViewModel
+ *  - Caller should keep video sampling aligned with the classifier training fps
  */
 class PoseExtractor(
     context: Context,
@@ -171,9 +173,11 @@ class PoseExtractor(
 
             val keypoints = Array(17) { k ->
                 val base = 5 + k * 3
+                val xPixel = row[base] * scaleX
+                val yPixel = row[base+1] * scaleY
                 Keypoint(
-                    x    = row[base]   * scaleX,
-                    y    = row[base+1] * scaleY,
+                    x    = (xPixel / origW.toFloat()).coerceIn(0f, 1f),
+                    y    = (yPixel / origH.toFloat()).coerceIn(0f, 1f),
                     conf = row[base+2],
                 )
             }
@@ -233,7 +237,7 @@ data class Keypoint(val x: Float, val y: Float, val conf: Float)
 data class PersonKeypoints(
     val confidence: Float,
     val boundingBox: android.graphics.RectF,
-    val keypoints: Array<Keypoint>,  // 17 keypoints per person
+    val keypoints: Array<Keypoint>,  // 17 normalised keypoints per person
 ) {
     /** Flatten to Float array for classifier input: [x0,y0,c0, x1,y1,c1, ...] × 17 */
     fun toFlatArray(): FloatArray = FloatArray(17 * 3) { i ->

@@ -44,7 +44,12 @@ class MatchRecordFragment : Fragment() {
                 return
             }
 
-        eventAdapter = EventAdapter()
+        eventAdapter = EventAdapter(
+            onReviewStatusChanged = { event, status ->
+                viewModel.updateEventReviewStatus(event.eventId, status)
+            },
+            showReviewControls = true,
+        )
         binding.rvEvents.apply {
             adapter = eventAdapter
             layoutManager = LinearLayoutManager(context)
@@ -54,7 +59,7 @@ class MatchRecordFragment : Fragment() {
         viewLifecycleOwner.lifecycleScope.launch {
             viewModel.getEventsFlow(matchId).collect { events ->
                 eventAdapter.submitList(events)
-                binding.tvEventCount.text = "${events.size} events detected"
+                binding.tvEventCount.text = "${events.size} candidate events flagged"
                 binding.tvMatchId.text = "Match: ${matchId.take(8)}…"
 
                 // Show terminal hash (last event's hash) as proof

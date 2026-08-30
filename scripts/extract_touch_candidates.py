@@ -375,11 +375,8 @@ def extract_window(video_path: Path, out_path: Path, start_frame: int, end_frame
     frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    # OpenCV's mp4v output is not reliably playable by browsers/Label Studio.
-    # Write an intermediate file, then encode a standard H.264/yuv420p MP4.
-    raw_path = out_path.with_name(f"{out_path.stem}.raw.mp4")
     writer = cv2.VideoWriter(
-        str(raw_path),
+        str(out_path),
         cv2.VideoWriter_fourcc(*"mp4v"),
         fps,
         (frame_w, frame_h),
@@ -398,24 +395,24 @@ def extract_window(video_path: Path, out_path: Path, start_frame: int, end_frame
             cap.grab()
     writer.release()
     cap.release()
-    if written <= 0:
-        raw_path.unlink(missing_ok=True)
-        return False
+    return written > 0
 
+
+def transcode_for_label_studio(source: Path, destination: Path) -> bool:
+    """Create a browser-compatible H.264 copy for the small human review batch."""
     result = subprocess.run(
         [
             "ffmpeg", "-y", "-loglevel", "error",
-            "-i", str(raw_path),
+            "-i", str(source),
             "-c:v", "libx264", "-pix_fmt", "yuv420p",
-            "-an", "-movflags", "+faststart", str(out_path),
+            "-an", "-movflags", "+faststart", str(destination),
         ],
         capture_output=True,
         text=True,
     )
-    raw_path.unlink(missing_ok=True)
     if result.returncode != 0:
-        print(f"ffmpeg error while writing {out_path.name}: {result.stderr.strip()}")
-        out_path.unlink(missing_ok=True)
+        print(f"ffmpeg error while writing {destination.name}: {result.stderr.strip()}")
+        destination.unlink(missing_ok=True)
         return False
     return True
 
@@ -624,7 +621,8 @@ def main() -> None:
     for row in seed_rows:
         source = Path(row["window_path"])
         destination = seed_windows_dir / source.name
-        shutil.copy2(source, destination)
+        if not transcode_for_label_studio(source, destination):
+            raise RuntimeError(f"Could not create Label Studio clip: {source}")
     seed_bundle = Path(shutil.make_archive(str(out_dir / "seed_windows_only_bundle"), "zip", str(seed_windows_dir)))
 
     label_studio_json = out_dir / "label_studio_seed_import.json"

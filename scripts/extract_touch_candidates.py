@@ -20,6 +20,7 @@ import csv
 import json
 import math
 import os
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
@@ -83,6 +84,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--window-sec", type=float, default=1.6)
     parser.add_argument("--max-clips", type=int, default=0, help="0 means all clips")
     parser.add_argument("--max-windows", type=int, default=800)
+    parser.add_argument(
+        "--max-windows-per-source",
+        type=int,
+        default=80,
+        help="Cap candidate windows from one source video so the review set is not one match.",
+    )
     parser.add_argument("--seed-size", type=int, default=50)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--conf", type=float, default=0.25)
@@ -227,6 +234,9 @@ class SimpleTracker:
 def read_clip_index(path: Path, max_clips: int) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8", newline="") as f:
         rows = list(csv.DictReader(f))
+    for row in rows:
+        if not row.get("path") and row.get("file"):
+            row["path"] = row["file"]
     rows = [r for r in rows if r.get("path") and Path(r["path"]).exists()]
     return rows[:max_clips] if max_clips > 0 else rows
 
@@ -364,8 +374,11 @@ def extract_window(video_path: Path, out_path: Path, start_frame: int, end_frame
     frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    # OpenCV's mp4v output is not reliably playable by browsers/Label Studio.
+    # Write an intermediate file, then encode a standard H.264/yuv420p MP4.
+    raw_path = out_path.with_name(f"{out_path.stem}.raw.mp4")
     writer = cv2.VideoWriter(
-        str(out_path),
+        str(raw_path),
         cv2.VideoWriter_fourcc(*"mp4v"),
         fps,
         (frame_w, frame_h),
@@ -384,7 +397,26 @@ def extract_window(video_path: Path, out_path: Path, start_frame: int, end_frame
             cap.grab()
     writer.release()
     cap.release()
-    return written > 0
+    if written <= 0:
+        raw_path.unlink(missing_ok=True)
+        return False
+
+    result = subprocess.run(
+        [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-i", str(raw_path),
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-an", "-movflags", "+faststart", str(out_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    raw_path.unlink(missing_ok=True)
+    if result.returncode != 0:
+        print(f"ffmpeg error while writing {out_path.name}: {result.stderr.strip()}")
+        out_path.unlink(missing_ok=True)
+        return False
+    return True
 
 
 def select_seed_set(rows: list[dict[str, str]], seed_size: int) -> list[str]:
@@ -408,28 +440,69 @@ def select_seed_set(rows: list[dict[str, str]], seed_size: int) -> list[str]:
             )
         )
 
+    # A first model must see more than one match/camera.  At least ten sources
+    # are preferred when available; this cap is relaxed automatically if there
+    # are fewer sources in the candidate pool.
+    sources = {row.get("source_video_id", "") for row in rows}
+    target_source_count = max(1, min(10, len(sources)))
+    max_per_source = max(1, math.ceil(seed_size / target_source_count))
+
     quotas = {
         "needs_review": int(seed_size * 0.60),
         "provisional_touch": int(seed_size * 0.25),
         "provisional_not_touch": seed_size,
     }
     chosen: list[str] = []
-    seen_sources: set[str] = set()
+    chosen_per_source: dict[str, int] = {}
     for name, quota in quotas.items():
         for row in buckets.get(name, []):
             if len([c for c in chosen if any(r["window_id"] == c and r["pre_label"] == name for r in rows)]) >= quota:
                 break
+            source = row.get("source_video_id", "")
+            if chosen_per_source.get(source, 0) >= max_per_source:
+                continue
             chosen.append(row["window_id"])
-            seen_sources.add(row.get("source_video_id", ""))
+            chosen_per_source[source] = chosen_per_source.get(source, 0) + 1
             if len(chosen) >= seed_size:
                 return chosen
 
     for row in rows:
-        if row["window_id"] not in chosen:
+        source = row.get("source_video_id", "")
+        if row["window_id"] not in chosen and chosen_per_source.get(source, 0) < max_per_source:
             chosen.append(row["window_id"])
+            chosen_per_source[source] = chosen_per_source.get(source, 0) + 1
         if len(chosen) >= seed_size:
             break
+
+    # If a small pool cannot fill the requested seed size within the diversity
+    # cap, fill the remainder rather than returning fewer review tasks.
+    if len(chosen) < seed_size:
+        for row in rows:
+            if row["window_id"] not in chosen:
+                chosen.append(row["window_id"])
+            if len(chosen) >= seed_size:
+                break
     return chosen
+
+
+def interleave_clips_by_source(clips: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Return clips in round-robin source order rather than filename order."""
+    by_source: dict[str, list[dict[str, str]]] = {}
+    for clip in clips:
+        source = clip.get("source_video_id") or clip.get("source_video") or clip.get("clip_id", "")
+        by_source.setdefault(source, []).append(clip)
+
+    ordered: list[dict[str, str]] = []
+    position = 0
+    while True:
+        added = False
+        for source_clips in by_source.values():
+            if position < len(source_clips):
+                ordered.append(source_clips[position])
+                added = True
+        if not added:
+            return ordered
+        position += 1
 
 
 def main() -> None:
@@ -442,12 +515,13 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     windows_dir.mkdir(parents=True, exist_ok=True)
 
-    clips = read_clip_index(clip_index, args.max_clips)
+    clips = interleave_clips_by_source(read_clip_index(clip_index, args.max_clips))
     print(f"Loaded {len(clips)} existing clips from {clip_index}")
     print(f"Writing active-learning artifacts to {out_dir}")
 
     model = load_pose_model(args.model)
     all_rows: list[dict[str, str]] = []
+    windows_per_source: dict[str, int] = {}
 
     for clip_num, clip in enumerate(clips, start=1):
         if len(all_rows) >= args.max_windows:
@@ -496,7 +570,7 @@ def main() -> None:
         windows = merge_pair_runs(pair_hits, args.target_fps, args.window_sec)
         source_video_id = clip.get("source_video_id") or clip.get("source_video") or clip.get("clip_id", "")
         for local_idx, win in enumerate(windows):
-            if len(all_rows) >= args.max_windows:
+            if len(all_rows) >= args.max_windows or windows_per_source.get(source_video_id, 0) >= args.max_windows_per_source:
                 break
             window_id = f"{clip.get('clip_id', clip_path.stem)}_w{local_idx:03d}"
             out_video = windows_dir / f"{window_id}.mp4"
@@ -519,6 +593,7 @@ def main() -> None:
                 **{k: str(v) for k, v in win.items()},
             }
             all_rows.append(row)
+            windows_per_source[source_video_id] = windows_per_source.get(source_video_id, 0) + 1
         print(f"[{clip_num}/{len(clips)}] {clip_path.name}: {len(windows)} candidates, total={len(all_rows)}")
 
     if not all_rows:
@@ -548,6 +623,13 @@ def main() -> None:
     summary = {
         "total_candidate_windows": len(all_rows),
         "seed_review_windows": len(seed_ids),
+        "candidate_sources": len(windows_per_source),
+        "candidate_windows_per_source": windows_per_source,
+        "seed_sources": len({r.get("source_video_id", "") for r in seed_rows}),
+        "seed_windows_per_source": {
+            source: sum(1 for row in seed_rows if row.get("source_video_id", "") == source)
+            for source in sorted({r.get("source_video_id", "") for r in seed_rows})
+        },
         "feature_csv": str(feature_csv),
         "seed_csv": str(seed_csv),
         "label_studio_seed_import": str(label_studio_json),

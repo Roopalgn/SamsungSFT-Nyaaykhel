@@ -20,6 +20,7 @@ import csv
 import json
 import math
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -616,6 +617,16 @@ def main() -> None:
         writer.writeheader()
         writer.writerows(seed_rows)
 
+    # Keep the human-facing review batch separate so it can be downloaded and
+    # uploaded to Label Studio without manually searching through candidates.
+    seed_windows_dir = out_dir / "seed_windows_only"
+    seed_windows_dir.mkdir(parents=True, exist_ok=True)
+    for row in seed_rows:
+        source = Path(row["window_path"])
+        destination = seed_windows_dir / source.name
+        shutil.copy2(source, destination)
+    seed_bundle = Path(shutil.make_archive(str(out_dir / "seed_windows_only_bundle"), "zip", str(seed_windows_dir)))
+
     label_studio_json = out_dir / "label_studio_seed_import.json"
     seed_import = [{"data": {"video": row["window_path"]}, "meta": {"window_id": row["window_id"]}} for row in seed_rows]
     label_studio_json.write_text(json.dumps(seed_import, indent=2), encoding="utf-8")
@@ -630,6 +641,8 @@ def main() -> None:
             source: sum(1 for row in seed_rows if row.get("source_video_id", "") == source)
             for source in sorted({r.get("source_video_id", "") for r in seed_rows})
         },
+        "seed_windows_dir": str(seed_windows_dir),
+        "seed_bundle": str(seed_bundle),
         "feature_csv": str(feature_csv),
         "seed_csv": str(seed_csv),
         "label_studio_seed_import": str(label_studio_json),

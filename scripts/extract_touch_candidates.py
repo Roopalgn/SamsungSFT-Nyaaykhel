@@ -95,6 +95,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--conf", type=float, default=0.25)
     parser.add_argument("--device", default=None, help="Example: 0 for GPU, cpu for CPU")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Resume a stopped run from per-clip metadata in --out-dir. "
+            "Use the same --out-dir and input settings when restarting."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -503,6 +511,92 @@ def interleave_clips_by_source(clips: list[dict[str, str]]) -> list[dict[str, st
         position += 1
 
 
+def write_csv_atomic(path: Path, rows: list[dict[str, str]]) -> None:
+    """Write a CSV atomically so an interrupted checkpoint remains readable."""
+    if not rows:
+        return
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    temporary.replace(path)
+
+
+def write_json_atomic(path: Path, payload: dict[str, object]) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temporary.replace(path)
+
+
+def checkpoint_progress(
+    out_dir: Path,
+    rows: list[dict[str, str]],
+    completed_clip_ids: set[str],
+    seed_size: int,
+) -> None:
+    """Persist usable metadata after every completed source clip.
+
+    Candidate videos are already written as they are found.  These files make
+    their metadata durable during an interruption and permit --resume to skip
+    clips that have already completed.  They are deliberately marked partial:
+    the normal artifacts and Label Studio bundle are created only after a full
+    successful run.
+    """
+    partial_features = out_dir / "touch_candidate_features.partial.csv"
+    partial_seed = out_dir / "seed_review.partial.csv"
+    progress_path = out_dir / "progress.partial.json"
+
+    if rows:
+        seed_ids = set(select_seed_set(rows, min(seed_size, len(rows))))
+        checkpoint_rows = [
+            {**row, "review_priority": "seed" if row["window_id"] in seed_ids else ""}
+            for row in rows
+        ]
+        write_csv_atomic(partial_features, checkpoint_rows)
+        write_csv_atomic(
+            partial_seed,
+            [row for row in checkpoint_rows if row["review_priority"] == "seed"],
+        )
+
+    per_source: dict[str, int] = {}
+    for row in rows:
+        source = row.get("source_video_id", "")
+        per_source[source] = per_source.get(source, 0) + 1
+    write_json_atomic(
+        progress_path,
+        {
+            "status": "partial",
+            "completed_clips": len(completed_clip_ids),
+            "completed_clip_ids": sorted(completed_clip_ids),
+            "candidate_windows": len(rows),
+            "candidate_windows_per_source": per_source,
+            "feature_csv": str(partial_features),
+            "seed_csv": str(partial_seed),
+            "note": "Partial checkpoint only. Run again with --resume to continue; do not train from it as final output.",
+        },
+    )
+
+
+def load_resume_checkpoint(out_dir: Path) -> tuple[list[dict[str, str]], set[str]]:
+    progress_path = out_dir / "progress.partial.json"
+    features_path = out_dir / "touch_candidate_features.partial.csv"
+    if not progress_path.exists() or not features_path.exists():
+        raise FileNotFoundError(
+            "--resume needs progress.partial.json and touch_candidate_features.partial.csv "
+            f"inside {out_dir}. Start a fresh run without --resume first."
+        )
+    with features_path.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    if progress.get("status") == "complete":
+        raise RuntimeError(
+            f"{out_dir} is already complete. Use its normal artifacts or choose a new --out-dir."
+        )
+    completed = {str(value) for value in progress.get("completed_clip_ids", [])}
+    return rows, completed
+
+
 def main() -> None:
     args = parse_args()
     base_dir = Path(args.base_dir)
@@ -519,15 +613,30 @@ def main() -> None:
 
     model = load_pose_model(args.model)
     all_rows: list[dict[str, str]] = []
+    completed_clip_ids: set[str] = set()
+    if args.resume:
+        all_rows, completed_clip_ids = load_resume_checkpoint(out_dir)
+        print(
+            f"Resuming from {len(completed_clip_ids)} completed clips and "
+            f"{len(all_rows)} candidate windows."
+        )
     windows_per_source: dict[str, int] = {}
+    for row in all_rows:
+        source = row.get("source_video_id", "")
+        windows_per_source[source] = windows_per_source.get(source, 0) + 1
 
     for clip_num, clip in enumerate(clips, start=1):
         if len(all_rows) >= args.max_windows:
             break
         clip_path = Path(clip["path"])
+        clip_id = clip.get("clip_id", clip_path.stem)
+        if clip_id in completed_clip_ids:
+            continue
         cap = cv2.VideoCapture(str(clip_path))
         if not cap.isOpened():
             print(f"Skipping unreadable clip: {clip_path}")
+            completed_clip_ids.add(clip_id)
+            checkpoint_progress(out_dir, all_rows, completed_clip_ids, args.seed_size)
             continue
         source_fps = cap.get(cv2.CAP_PROP_FPS) or args.target_fps
         source_step = max(1, int(round(source_fps / args.target_fps)))
@@ -583,7 +692,7 @@ def main() -> None:
                 continue
             row = {
                 "window_id": window_id,
-                "clip_id": clip.get("clip_id", clip_path.stem),
+                "clip_id": clip_id,
                 "source_video_id": source_video_id,
                 "source_clip_path": str(clip_path),
                 "window_path": str(out_video),
@@ -592,6 +701,8 @@ def main() -> None:
             }
             all_rows.append(row)
             windows_per_source[source_video_id] = windows_per_source.get(source_video_id, 0) + 1
+        completed_clip_ids.add(clip_id)
+        checkpoint_progress(out_dir, all_rows, completed_clip_ids, args.seed_size)
         print(f"[{clip_num}/{len(clips)}] {clip_path.name}: {len(windows)} candidates, total={len(all_rows)}")
 
     if not all_rows:
@@ -602,17 +713,11 @@ def main() -> None:
         row["review_priority"] = "seed" if row["window_id"] in seed_ids else ""
 
     feature_csv = out_dir / "touch_candidate_features.csv"
-    with feature_csv.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(all_rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(all_rows)
+    write_csv_atomic(feature_csv, all_rows)
 
     seed_csv = out_dir / "seed_review.csv"
-    with seed_csv.open("w", encoding="utf-8", newline="") as f:
-        seed_rows = [r for r in all_rows if r["review_priority"] == "seed"]
-        writer = csv.DictWriter(f, fieldnames=list(all_rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(seed_rows)
+    seed_rows = [r for r in all_rows if r["review_priority"] == "seed"]
+    write_csv_atomic(seed_csv, seed_rows)
 
     # Keep the human-facing review batch separate so it can be downloaded and
     # uploaded to Label Studio without manually searching through candidates.
@@ -647,7 +752,16 @@ def main() -> None:
         "windows_dir": str(windows_dir),
         "warning": "pre_label values are provisional and must not be treated as ground truth",
     }
-    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    write_json_atomic(out_dir / "summary.json", summary)
+    write_json_atomic(
+        out_dir / "progress.partial.json",
+        {
+            "status": "complete",
+            "completed_clips": len(completed_clip_ids),
+            "candidate_windows": len(all_rows),
+            "note": "The normal CSV, summary and Label Studio bundle are the final artifacts for this run.",
+        },
+    )
 
     print(json.dumps(summary, indent=2))
 

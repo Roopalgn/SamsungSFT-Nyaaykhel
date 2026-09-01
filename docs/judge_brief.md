@@ -41,6 +41,7 @@ The first focused capability is touch/contact review. This is deliberately narro
 - Created a separate seed-review batch for human verification.
 - Added H.264/yuv420p conversion for the small review batch so clips are browser-compatible with Label Studio.
 - Added source balancing controls so one match does not automatically dominate the review set.
+- Added temporal deduplication so shifted windows from one sustained hold or escape are not counted as separate seed incidents.
 - Added resumable per-clip checkpoints to the extraction script. During an active Colab runtime, an interrupted run can resume from its last completed clip.
 
 ### Current data status

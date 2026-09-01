@@ -33,6 +33,7 @@ import numpy as np
 COCO_HAND_KP = (9, 10)
 COCO_TORSO_KP = (5, 6, 11, 12)
 MIN_KP_CONF = 0.25
+SEED_EVENT_GAP_SEC = 4.0
 
 
 @dataclass
@@ -83,6 +84,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", default=None)
     parser.add_argument("--target-fps", type=float, default=10.0)
     parser.add_argument("--window-sec", type=float, default=1.6)
+    parser.add_argument(
+        "--temporal-nms-sec",
+        type=float,
+        default=3.0,
+        help="Keep at most one candidate peak per this many seconds inside each five-second source clip.",
+    )
     parser.add_argument("--max-clips", type=int, default=0, help="0 means all clips")
     parser.add_argument("--max-windows", type=int, default=800)
     parser.add_argument(
@@ -375,6 +382,38 @@ def merge_pair_runs(pair_frames: list[PairFrame], fps: float, window_sec: float)
     return windows
 
 
+def suppress_nearby_windows(
+    windows: list[dict[str, float]], fps: float, minimum_gap_sec: float
+) -> list[dict[str, float]]:
+    """Keep the strongest temporal peak rather than shifted copies of one interaction.
+
+    A sustained hold can fragment into multiple tracker runs.  They all look
+    like candidate windows even though a reviewer sees one underlying event.
+    This small temporal NMS runs within one input clip before any MP4 is made.
+    """
+    if len(windows) < 2:
+        return windows
+
+    def quality(window: dict[str, float]) -> tuple[float, float, float, float]:
+        return (
+            float(window.get("pre_label_confidence", 0.0)),
+            float(window.get("max_iou", 0.0)),
+            -float(window.get("min_hand_torso_dist", 1.0)),
+            -float(window.get("min_kp_dist", 1.0)),
+        )
+
+    chosen: list[dict[str, float]] = []
+    for window in sorted(windows, key=quality, reverse=True):
+        center_sec = float(window["center_frame"]) / max(fps, 1.0)
+        if any(
+            abs(center_sec - float(existing["center_frame"]) / max(fps, 1.0)) < minimum_gap_sec
+            for existing in chosen
+        ):
+            continue
+        chosen.append(window)
+    return sorted(chosen, key=lambda window: float(window["center_frame"]))
+
+
 def extract_window(video_path: Path, out_path: Path, start_frame: int, end_frame: int, fps: float) -> bool:
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -426,9 +465,6 @@ def transcode_for_label_studio(source: Path, destination: Path) -> bool:
 
 
 def select_seed_set(rows: list[dict[str, str]], seed_size: int) -> list[str]:
-    if len(rows) <= seed_size:
-        return [r["window_id"] for r in rows]
-
     buckets = {
         "needs_review": [],
         "provisional_touch": [],
@@ -460,34 +496,70 @@ def select_seed_set(rows: list[dict[str, str]], seed_size: int) -> list[str]:
     }
     chosen: list[str] = []
     chosen_per_source: dict[str, int] = {}
+    chosen_per_label: dict[str, int] = {}
+    chosen_rows: list[dict[str, str]] = []
+
+    def is_distinct_event(row: dict[str, str]) -> bool:
+        """Reject shifted windows of the same source-video incident.
+
+        Consecutive five-second clips overlap by two seconds.  Combining their
+        `source_start_sec` and `window_center_sec` lets the seed set remove
+        duplicate views of one sustained tackle/escape rather than pretending
+        they are independent labels.
+        """
+        source = row.get("source_video_id", "")
+        try:
+            event_sec = float(row["source_start_sec"]) + float(row["window_center_sec"])
+        except (KeyError, TypeError, ValueError):
+            # Compatibility with older CSVs: at least retain one window per
+            # source clip rather than filling the seed set with its offsets.
+            return all(
+                not (
+                    source == existing.get("source_video_id", "")
+                    and row.get("clip_id", "") == existing.get("clip_id", "")
+                )
+                for existing in chosen_rows
+            )
+        for existing in chosen_rows:
+            if source != existing.get("source_video_id", ""):
+                continue
+            try:
+                existing_sec = float(existing["source_start_sec"]) + float(existing["window_center_sec"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if abs(event_sec - existing_sec) <= SEED_EVENT_GAP_SEC:
+                return False
+        return True
+
     for name, quota in quotas.items():
         for row in buckets.get(name, []):
-            if len([c for c in chosen if any(r["window_id"] == c and r["pre_label"] == name for r in rows)]) >= quota:
+            if chosen_per_label.get(name, 0) >= quota:
                 break
             source = row.get("source_video_id", "")
-            if chosen_per_source.get(source, 0) >= max_per_source:
+            if chosen_per_source.get(source, 0) >= max_per_source or not is_distinct_event(row):
                 continue
             chosen.append(row["window_id"])
+            chosen_rows.append(row)
             chosen_per_source[source] = chosen_per_source.get(source, 0) + 1
+            chosen_per_label[name] = chosen_per_label.get(name, 0) + 1
             if len(chosen) >= seed_size:
                 return chosen
 
     for row in rows:
         source = row.get("source_video_id", "")
-        if row["window_id"] not in chosen and chosen_per_source.get(source, 0) < max_per_source:
+        if (
+            row["window_id"] not in chosen
+            and chosen_per_source.get(source, 0) < max_per_source
+            and is_distinct_event(row)
+        ):
             chosen.append(row["window_id"])
+            chosen_rows.append(row)
             chosen_per_source[source] = chosen_per_source.get(source, 0) + 1
         if len(chosen) >= seed_size:
             break
 
-    # If a small pool cannot fill the requested seed size within the diversity
-    # cap, fill the remainder rather than returning fewer review tasks.
-    if len(chosen) < seed_size:
-        for row in rows:
-            if row["window_id"] not in chosen:
-                chosen.append(row["window_id"])
-            if len(chosen) >= seed_size:
-                break
+    # Do not fill the remainder with duplicates merely to reach seed_size.
+    # A smaller, honest seed batch is more useful than an inflated one.
     return chosen
 
 
@@ -674,8 +746,16 @@ def main() -> None:
             frame_idx += 1
         cap.release()
 
-        windows = merge_pair_runs(pair_hits, args.target_fps, args.window_sec)
+        windows = suppress_nearby_windows(
+            merge_pair_runs(pair_hits, args.target_fps, args.window_sec),
+            args.target_fps,
+            args.temporal_nms_sec,
+        )
         source_video_id = clip.get("source_video_id") or clip.get("source_video") or clip.get("clip_id", "")
+        try:
+            source_start_sec = float(clip.get("start_sec", 0) or 0)
+        except (TypeError, ValueError):
+            source_start_sec = 0.0
         for local_idx, win in enumerate(windows):
             if len(all_rows) >= args.max_windows or windows_per_source.get(source_video_id, 0) >= args.max_windows_per_source:
                 break
@@ -696,6 +776,8 @@ def main() -> None:
                 "source_video_id": source_video_id,
                 "source_clip_path": str(clip_path),
                 "window_path": str(out_video),
+                "source_start_sec": str(source_start_sec),
+                "window_center_sec": str(float(win["center_frame"]) / args.target_fps),
                 "verified_label": "",
                 **{k: str(v) for k, v in win.items()},
             }

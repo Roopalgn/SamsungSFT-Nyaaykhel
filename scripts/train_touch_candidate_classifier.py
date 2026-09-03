@@ -46,6 +46,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", default=None)
     parser.add_argument("--next-batch-size", type=int, default=50)
     parser.add_argument("--random-seed", type=int, default=42)
+    parser.add_argument(
+        "--pilot-mode",
+        action="store_true",
+        help=(
+            "Fit one clearly marked demonstration-only model with 10+ verified labels. "
+            "It uses every label for fitting and produces no held-out accuracy claim."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -205,12 +213,25 @@ def main() -> None:
     print(f"Usable verified labels: {len(y)}")
     print(f"Class counts: not_touch={int((y == 0).sum())}, touch={int((y == 1).sum())}")
 
-    if len(y) < 20:
-        raise SystemExit("Need at least ~20 usable verified labels before training.")
+    minimum_labels = 10 if args.pilot_mode else 20
+    if len(y) < minimum_labels:
+        raise SystemExit(
+            f"Need at least ~{minimum_labels} usable verified labels "
+            f"{'for pilot mode' if args.pilot_mode else 'before training'}."
+        )
     if len(np.unique(y)) < 2:
         raise SystemExit("Need both touch and not_touch verified examples before training.")
 
-    x_train, x_test, y_train, y_test = split_verified(x, y, groups, args.random_seed)
+    if args.pilot_mode:
+        # With only a tiny, two-source seed set, a random train/test split
+        # would create a misleading accuracy number.  Fit all verified labels
+        # so the artifact can demonstrate the end-to-end pipeline, while the
+        # output explicitly records that it is not an evaluated model.
+        x_train, y_train = x, y
+        x_test = np.empty((0, x.shape[1]), dtype=np.float32)
+        y_test = np.empty((0,), dtype=np.int64)
+    else:
+        x_train, x_test, y_train, y_test = split_verified(x, y, groups, args.random_seed)
 
     model = Pipeline(
         [
@@ -227,20 +248,23 @@ def main() -> None:
     )
     model.fit(x_train, y_train)
 
-    prob_test = model.predict_proba(x_test)[:, 1]
-    pred_test = (prob_test >= 0.5).astype(np.int64)
-    cm = confusion_matrix(y_test, pred_test, labels=[0, 1])
-    report = classification_report(
-        y_test,
-        pred_test,
-        labels=[0, 1],
-        target_names=["not_touch", "touch"],
-        output_dict=True,
-        zero_division=0,
-    )
+    cm = None
+    report = None
     auc = None
-    if len(np.unique(y_test)) == 2:
-        auc = float(roc_auc_score(y_test, prob_test))
+    if not args.pilot_mode:
+        prob_test = model.predict_proba(x_test)[:, 1]
+        pred_test = (prob_test >= 0.5).astype(np.int64)
+        cm = confusion_matrix(y_test, pred_test, labels=[0, 1])
+        report = classification_report(
+            y_test,
+            pred_test,
+            labels=[0, 1],
+            target_names=["not_touch", "touch"],
+            output_dict=True,
+            zero_division=0,
+        )
+        if len(np.unique(y_test)) == 2:
+            auc = float(roc_auc_score(y_test, prob_test))
 
     joblib_path = out_dir / "touch_candidate_classifier.joblib"
     joblib.dump(model, joblib_path)
@@ -259,6 +283,7 @@ def main() -> None:
         write_csv(out_dir / "all_unverified_ranked.csv", unlabeled_rows)
 
     metrics = {
+        "model_status": "pilot_only_no_held_out_evaluation" if args.pilot_mode else "evaluated_seed_model",
         "verified_labels": int(len(y)),
         "train_size": int(len(y_train)),
         "test_size": int(len(y_test)),
@@ -268,17 +293,24 @@ def main() -> None:
             "touch": int((y == 1).sum()),
         },
         "confusion_matrix_labels": ["not_touch", "touch"],
-        "confusion_matrix": cm.tolist(),
+        "confusion_matrix": cm.tolist() if cm is not None else None,
         "classification_report": report,
         "roc_auc": auc,
         "model_path": str(joblib_path),
         "tflite_export": tflite_message,
-        "evaluation_warning": "Metrics are valid only for manually verified labels, not provisional pre-labels.",
+        "evaluation_warning": (
+            "Pilot mode fitted all verified labels and intentionally produced no held-out metrics. "
+            "It is a workflow demonstration, not an accuracy claim."
+            if args.pilot_mode
+            else "Metrics are valid only for manually verified labels, not provisional pre-labels."
+        ),
     }
     metrics_path = out_dir / "verified_eval_metrics.json"
     metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
 
     print(json.dumps(metrics, indent=2))
+    if args.pilot_mode:
+        print("PILOT ONLY: no held-out accuracy was calculated or should be presented.")
     print()
     print(f"Next review batch: {out_dir / 'next_review_batch.csv'}")
     print(tflite_message)

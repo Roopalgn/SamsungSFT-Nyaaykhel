@@ -75,3 +75,9 @@ seed_review_labels.json
 ```
 
 After the first 30-50 verified windows, train the first binary model and use active learning to choose the next most useful batch.
+
+For a small early seed set (at least 10 usable labels with both classes), the
+training script also provides `--pilot-mode`. It fits a demonstration-only
+artifact and deliberately does **not** calculate or report held-out accuracy.
+Use it to demonstrate the end-to-end workflow; collect a larger, more diverse
+set before making any performance claim.
